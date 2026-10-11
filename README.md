@@ -1,5 +1,7 @@
 # Annex
 
+[![Built with AI](https://img.shields.io/badge/built_with-AI-8A2BE2)](#built-with-ai)
+
 Load and free [git-annex](https://git-annex.branchable.com/) content on demand,
 from a single button in Obsidian's status bar.
 
@@ -159,6 +161,12 @@ node test/pointer-detect.test.js              # pointer detection
 node test/annex-state.test.js                 # load / drop / none mapping
 ```
 
+## Built with AI
+
+This plugin was built with AI (Letta Code & DeepSeek). I use it myself to
+handle my second-brain annex — it is not battle-tested by a wide user base.
+Open for feature requests, issues and bug reports.
+
 ## License
 
-[MIT](LICENSE) © Aaron Matthis
+[MIT](LICENSE) © rapus95
