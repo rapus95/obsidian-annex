@@ -1,0 +1,9 @@
+# Dependencies / artifacts no plugin needs to ship
+node_modules/
+*.log
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

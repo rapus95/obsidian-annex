@@ -1,0 +1,4 @@
+# Echte Datei
+
+Dies ist echter Inhalt und kein git-annex Pointer. Der Text beginnt mit einem
+Markdown-Heading, nicht mit "/annex/objects/".
