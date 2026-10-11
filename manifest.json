@@ -1,6 +1,6 @@
 {
   "id": "obsidian-annex",
-  "name": "Obsidian Annex",
+  "name": "Annex",
   "version": "0.1.0",
   "minAppVersion": "1.4.0",
   "description": "Load and free git-annex content on demand from a button in the status bar.",

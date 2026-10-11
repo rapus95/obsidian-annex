@@ -1,4 +1,4 @@
-# Obsidian Annex
+# Annex
 
 Load and free [git-annex](https://git-annex.branchable.com/) content on demand,
 from a single button in Obsidian's status bar.
@@ -26,12 +26,12 @@ git annex get path/to/file.pdf     # download the content
 git annex drop path/to/file.pdf    # delete the local copy again (keeps the remote)
 ```
 
-That is exactly the workflow Obsidian Annex automates. Instead of dropping to a
+That is exactly the workflow Annex automates. Instead of dropping to a
 terminal, you open the file in Obsidian and click one button.
 
 ## How it works
 
-Obsidian Annex watches the file you open and shows a status-bar toggle whose
+Annex watches the file you open and shows a status-bar toggle whose
 label and click action depend on that file's state:
 
 | File state | Status bar shows | Click does |
@@ -63,7 +63,7 @@ hint when the failure looks like a connection problem).
 
 ## Installation
 
-Obsidian Annex is not in the community-plugin directory yet, so install it
+Annex is not in the community-plugin directory yet, so install it
 manually. Everything the plugin needs is two files, `main.js` and
 `manifest.json`.
 
@@ -72,7 +72,7 @@ manually. Everything the plugin needs is two files, `main.js` and
 2. Copy them into a new folder inside your vault:
    `<your-vault>/.obsidian/plugins/obsidian-annex/`.
 3. In Obsidian, open **Settings → Community plugins**, turn off *Restricted
-   mode* if it is on, and enable **Obsidian Annex**.
+   mode* if it is on, and enable **Annex**.
 
 Because the plugin is not in the directory yet, it will also show up in the
 **Community plugins → Browse** list only after it is added there. To install
@@ -103,7 +103,7 @@ The plugin folder must be named exactly `obsidian-annex`:
 
 ## Configuration
 
-Open **Settings → Obsidian Annex**.
+Open **Settings → Annex**.
 
 - **Annex repository path** — the folder that holds the git-annex repository,
   relative to the vault root (for example `annex`, `media`, or `brain`).

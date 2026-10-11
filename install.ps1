@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Install the Obsidian Annex plugin into a vault's plugin folder.
+    Install the Annex plugin into a vault's plugin folder.
 
 .DESCRIPTION
     Copies the self-contained manifest.json + main.js into
@@ -42,5 +42,5 @@ foreach ($f in $files) {
     Write-Host ("copied {0} -> {1}" -f $f, $target)
 }
 
-Write-Host "Obsidian Annex installed to $target"
+Write-Host "Annex installed to $target"
 Write-Host "Enable it under Settings > Community plugins (turn off Restricted mode if needed)."

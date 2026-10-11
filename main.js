@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Obsidian Annex — an Obsidian plugin that loads and frees git-annex content.
+ * Annex — an Obsidian plugin that loads and frees git-annex content.
  *
  * SINGLE FILE ON PURPOSE. Obsidian runs plugins inside an Electron renderer
  * (`electron/js2c/renderer_init`), where a relative `require('./pointer.js')`
@@ -10,7 +10,7 @@
  * suite can exercise them without a build step.
  *
  * The git-annex repository may be the vault itself or any folder inside it
- * (configured under Settings → Obsidian Annex). Paths are resolved from the
+ * (configured under Settings → Annex). Paths are resolved from the
  * vault root at runtime, so nothing here depends on where the vault lives.
  *
  * The plugin exposes a single status-bar *toggle* whose meaning depends on the
@@ -416,22 +416,22 @@ class ObsidianAnnexPlugin extends Plugin {
     if (this.busy) return;
     const file = this.currentFile || this.app.workspace.getActiveFile();
     if (!file) {
-      new Notice('Obsidian Annex: no active file.');
+      new Notice('Annex: no active file.');
       return;
     }
 
     const result = await this.classify(file);
 
     if (result.reason === 'no-vault') {
-      new Notice('Obsidian Annex: vault path could not be determined (desktop adapter expected).');
+      new Notice('Annex: vault path could not be determined (desktop adapter expected).');
       return;
     }
     if (result.reason === 'not-annex-repo') {
-      new Notice('Obsidian Annex: ' + this.describeRepo() + ' is not a git-annex repository (no .git found). Set the path in Settings → Obsidian Annex.');
+      new Notice('Annex: ' + this.describeRepo() + ' is not a git-annex repository (no .git found). Set the path in Settings → Annex.');
       return;
     }
     if (result.reason === 'outside-repo') {
-      new Notice('Obsidian Annex: "' + file.path + '" is outside the annex repository (' + this.describeRepo() + ').');
+      new Notice('Annex: "' + file.path + '" is outside the annex repository (' + this.describeRepo() + ').');
       return;
     }
 
@@ -440,7 +440,7 @@ class ObsidianAnnexPlugin extends Plugin {
     } else if (result.mode === 'drop') {
       await this.dropFile(result);
     } else {
-      new Notice('Obsidian Annex: nothing to do for "' + file.path + '" (not an annexed file, or the only copy).');
+      new Notice('Annex: nothing to do for "' + file.path + '" (not an annexed file, or the only copy).');
     }
   }
 
@@ -451,12 +451,12 @@ class ObsidianAnnexPlugin extends Plugin {
     try {
       await run('git annex get ' + quoteArg(rel), repo);
       this.loaded.add(file.path);
-      new Notice('Obsidian Annex: loaded "' + rel + '".');
+      new Notice('Annex: loaded "' + rel + '".');
       await this.reloadFile(file);
     } catch (error) {
       const detail = describeError(error);
       const hint = looksUnreachable(detail) ? 'remote unreachable? ' : '';
-      new Notice('Obsidian Annex: load failed. ' + hint + detail, 12000);
+      new Notice('Annex: load failed. ' + hint + detail, 12000);
     } finally {
       this.busy = false;
       await this.refreshStatus(this.app.workspace.getActiveFile());
@@ -471,12 +471,12 @@ class ObsidianAnnexPlugin extends Plugin {
       // Deliberately no --force: a refusal is the safety net, not an error.
       await run('git annex drop ' + quoteArg(rel), repo);
       this.loaded.delete(file.path);
-      new Notice('Obsidian Annex: freed "' + rel + '".');
+      new Notice('Annex: freed "' + rel + '".');
       await this.reloadFile(file);
     } catch (error) {
       const detail = describeError(error);
       const hint = looksUnreachable(detail) ? 'remote unreachable? ' : '';
-      new Notice('Obsidian Annex: free refused. ' + hint + detail, 12000);
+      new Notice('Annex: free refused. ' + hint + detail, 12000);
     } finally {
       this.busy = false;
       await this.refreshStatus(this.app.workspace.getActiveFile());
@@ -488,13 +488,13 @@ class ObsidianAnnexPlugin extends Plugin {
 
     const repo = this.getAnnexRepo();
     if (!repo || !fs.existsSync(path.join(repo, '.git'))) {
-      new Notice('Obsidian Annex: ' + this.describeRepo() + ' is not a git-annex repository (no .git found). Set the path in Settings → Obsidian Annex.');
+      new Notice('Annex: ' + this.describeRepo() + ' is not a git-annex repository (no .git found). Set the path in Settings → Annex.');
       return;
     }
 
     const vaultPaths = Array.from(this.loaded);
     if (!vaultPaths.length) {
-      new Notice('Obsidian Annex: nothing has been loaded this session.');
+      new Notice('Annex: nothing has been loaded this session.');
       return;
     }
 
@@ -505,7 +505,7 @@ class ObsidianAnnexPlugin extends Plugin {
       if (rel) rels.push(rel);
     }
     if (!rels.length) {
-      new Notice('Obsidian Annex: no files can be freed.');
+      new Notice('Annex: no files can be freed.');
       return;
     }
 
@@ -516,11 +516,11 @@ class ObsidianAnnexPlugin extends Plugin {
       // No --force here either.
       await run('git annex drop ' + rels.map(quoteArg).join(' '), repo);
       this.loaded.clear();
-      new Notice('Obsidian Annex: freed ' + rels.length + ' file(s).');
+      new Notice('Annex: freed ' + rels.length + ' file(s).');
     } catch (error) {
       const detail = describeError(error);
       const hint = looksUnreachable(detail) ? 'remote unreachable? ' : '';
-      new Notice('Obsidian Annex: free refused. ' + hint + detail, 12000);
+      new Notice('Annex: free refused. ' + hint + detail, 12000);
     } finally {
       this.busy = false;
       await this.refreshStatus(this.app.workspace.getActiveFile());
@@ -544,7 +544,7 @@ class ObsidianAnnexPlugin extends Plugin {
       }
     } catch (err) {
       // Never let a reload failure mask a successful annex operation.
-      new Notice('Obsidian Annex: annex action succeeded, but the view could not be refreshed: ' + describeError(err));
+      new Notice('Annex: annex action succeeded, but the view could not be refreshed: ' + describeError(err));
     }
   }
 }
@@ -563,7 +563,7 @@ class ObsidianAnnexSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl('h2', { text: 'Obsidian Annex' });
+    containerEl.createEl('h2', { text: 'Annex settings' });
 
     new Setting(containerEl)
       .setName('Annex repository path')
