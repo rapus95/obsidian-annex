@@ -42,11 +42,22 @@ label and click action depend on that file's state:
 | Not an annexed file at all | *(hidden)* | — |
 
 How it decides: it reads only the first ~100 bytes of the file to spot a pointer.
-For real files it runs `git annex whereis --json <path>` and offers *free* only
+For real files it runs `git annex whereis --json <file>` and offers *free* only
 when a location other than `here` holds a copy. That is a **safety rule**: the
 last copy is never offered for dropping, and `git annex drop` is **never** run
 with `--force` — if git-annex refuses, the refusal is shown in a notice instead
 of being worked around.
+
+To find the repository the plugin does not need to know where it is: every git
+command runs in the folder of the file you opened (`git -C <that folder> …`), and
+git walks up the directory tree until it finds `.git`. So it works with a single
+annex repository, with the vault itself being the repository, or with **several
+annex repositories** (even ones outside the vault) — whichever repository the open
+file belongs to is the one used.
+
+If the file is not in a git repository, or the repository is not a git-annex
+repository, or the file is not tracked by git-annex, clicking shows a clear
+notice saying which of those it is.
 
 While an action runs the item shows `⏳ Annex: loading…` / `⏳ Annex: freeing…`.
 On failure you get a notice with the error text (plus a “remote unreachable?”
@@ -58,8 +69,10 @@ hint when the failure looks like a connection problem).
   `child_process`; it is marked `isDesktopOnly` and will not run on mobile.
 - **`git` with the `git-annex` extension on your `PATH`.** `git annex whereis
   --json` must work (git-annex ≥ 5).
-- A vault that contains a **git-annex repository** — either the vault folder
-  itself, or a subfolder of it (see [Configuration](#configuration)).
+- A **git-annex repository** somewhere above the files you open — the vault
+  folder itself, a subfolder, or a repository outside the vault. The plugin
+  finds it per file, so you can have several in one vault (see
+  [Configuration](#configuration)).
 
 ## Installation
 
@@ -103,15 +116,13 @@ The plugin folder must be named exactly `obsidian-annex`:
 
 ## Configuration
 
-Open **Settings → Annex**.
+There is **nothing to configure.** An earlier version asked for the annex
+repository path; the plugin now discovers the repository per file with git
+itself, so any layout works — the vault as the repository, a subfolder, several
+repositories side by side, or a repository that lives outside the vault.
 
-- **Annex repository path** — the folder that holds the git-annex repository,
-  relative to the vault root (for example `annex`, `media`, or `brain`).
-  - Leave it **empty** if the vault folder itself is the annex repository.
-  - An **absolute** path (e.g. `D:\annex`) is also accepted.
-
-That is the only setting. Status-bar labels and commands are in English by
-default.
+If a `data.json` with an old `annexRepoPath` key is left in the plugin folder
+from an earlier version, it is simply ignored.
 
 ## Commands
 

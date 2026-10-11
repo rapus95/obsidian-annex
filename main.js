@@ -9,9 +9,12 @@
  * the pure helpers at the top are also hung off the exported class so the test
  * suite can exercise them without a build step.
  *
- * The git-annex repository may be the vault itself or any folder inside it
- * (configured under Settings → Annex). Paths are resolved from the
- * vault root at runtime, so nothing here depends on where the vault lives.
+ * NO CONFIGURATION. The annex repository is resolved *per file*: commands are
+ * run with `git -C <folder of the opened file>`, and git walks up the directory
+ * tree until it finds `.git`. That works for any layout — the vault itself being
+ * one annex repository, several annex repositories inside one vault, or a
+ * repository that lives outside the vault — without the plugin knowing where the
+ * repository is.
  *
  * The plugin exposes a single status-bar *toggle* whose meaning depends on the
  * file that is open:
@@ -26,7 +29,7 @@
  * worked around.
  */
 
-const { Plugin, PluginSettingTab, Setting, Notice } = require('obsidian');
+const { Plugin, Notice } = require('obsidian');
 const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -207,19 +210,74 @@ const TEXT_EXTENSIONS = new Set([
   'css', 'js', 'ts', 'yaml', 'yml',
 ]);
 
-// ---------------------------------------------------------------------------
-// Settings
-// ---------------------------------------------------------------------------
+/** Shell-quote a single argument for `exec` (Windows and POSIX friendly). */
+function quoteArg(value) {
+  return '"' + String(value).replace(/"/g, '\\"') + '"';
+}
 
-/** Default settings for a fresh install. */
-const DEFAULT_SETTINGS = {
-  /**
-   * Where the git-annex repository lives. Empty means "the vault root itself".
-   * A relative value (e.g. `annex`, `media`, `brain`) is resolved against the
-   * vault root; an absolute path is used as-is.
-   */
-  annexRepoPath: '',
-};
+/**
+ * Run a command through the shell and resolve with its output.
+ *
+ * Commands are always given an explicit `-C <dir>` so the working directory of
+ * the Obsidian process never matters.
+ */
+function run(command) {
+  return new Promise((resolve, reject) => {
+    exec(command, { windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+/** `git -C <dir> <rest...>` with every argument safely quoted. */
+function git(dir, rest) {
+  return 'git -C ' + quoteArg(dir) + ' ' + rest;
+}
+
+/** Is `dir` inside a git work tree? (git walks up until it finds `.git`.) */
+async function isGitRepo(dir) {
+  try {
+    await run(git(dir, 'rev-parse --show-toplevel'));
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+/**
+ * Is `dir` inside a git *annex* repository? `annex.uuid` is set by
+ * `git annex init` and is the cheapest reliable marker.
+ */
+async function isAnnexRepo(dir) {
+  try {
+    const { stdout } = await run(git(dir, 'config --get annex.uuid'));
+    return Boolean(String(stdout).trim());
+  } catch (err) {
+    return false;
+  }
+}
+
+/** Condense a Node/git error into one readable line for a Notice. */
+function describeError(error) {
+  const parts = [];
+  if (error && error.stderr) parts.push(String(error.stderr).trim());
+  if (!parts.length && error && error.stdout) parts.push(String(error.stdout).trim());
+  if (!parts.length && error && error.message) parts.push(String(error.message).trim());
+  const detail = parts.join(' ').split(/\r?\n/).filter(Boolean).slice(-3).join(' ');
+  return detail || 'unknown error';
+}
+
+/** Does the failure look like the annex remote being unreachable? */
+function looksUnreachable(text) {
+  return /ssh|connect|connection|unreachable|timed? ?out|network|no route|host key|host is down|refused/i
+    .test(String(text));
+}
 
 // ---------------------------------------------------------------------------
 // Plugin
@@ -227,8 +285,6 @@ const DEFAULT_SETTINGS = {
 
 class ObsidianAnnexPlugin extends Plugin {
   async onload() {
-    await this.loadSettings();
-
     this.loaded = new Set();   // vault-relative paths loaded during this session
     this.busy = false;
     this.mode = 'none';        // 'load' | 'drop' | 'none'
@@ -253,8 +309,6 @@ class ObsidianAnnexPlugin extends Plugin {
       callback: () => this.dropAllLoaded(),
     });
 
-    this.addSettingTab(new ObsidianAnnexSettingTab(this.app, this));
-
     this.registerEvent(
       this.app.workspace.on('file-open', (file) => {
         this.currentFile = file || null;
@@ -270,16 +324,6 @@ class ObsidianAnnexPlugin extends Plugin {
     this.hideStatus();
   }
 
-  // -- settings -------------------------------------------------------------
-
-  async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-  }
-
-  async saveSettings() {
-    await this.saveData(this.settings);
-  }
-
   // -- paths ----------------------------------------------------------------
 
   getVaultRoot() {
@@ -290,88 +334,72 @@ class ObsidianAnnexPlugin extends Plugin {
     return adapter && adapter.basePath;
   }
 
-  /**
-   * Absolute path of the git-annex repository, derived from the setting and the
-   * vault root. Returns null when no vault root can be determined and the
-   * setting is not absolute.
-   */
-  getAnnexRepo() {
-    const root = this.getVaultRoot();
-    const configured = String(this.settings && this.settings.annexRepoPath || '').trim();
-    if (path.isAbsolute(configured)) return configured;
-    if (!root) return null;
-    return configured ? path.join(root, configured) : root;
-  }
-
-  /** Human-readable form of the configured repository, for notices. */
-  describeRepo() {
-    const configured = String(this.settings && this.settings.annexRepoPath || '').trim();
-    return configured || '(vault root)';
-  }
-
   absolutePath(file) {
     const root = this.getVaultRoot();
     return path.join(root, file.path.split('/').join(path.sep));
-  }
-
-  /** Path of `absPath` relative to `repo`, in forward slashes; null if outside. */
-  repoRelativePath(absPath, repo) {
-    const rel = path.relative(repo, absPath);
-    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
-    return rel.split(path.sep).join('/');
   }
 
   // -- classification -------------------------------------------------------
 
   /**
    * Inspect `file` and decide which action applies. Quiet: never raises a
-   * Notice, never throws. Returns `{ mode, reason, file, repo, rel }`.
+   * Notice, never throws. Returns `{ mode, reason, file, dir, name }`.
+   *
+   * The repository is discovered per file: `dir` is the folder the file lives
+   * in, and every git command runs with `git -C <dir>`, so git finds the
+   * nearest repository by walking up.
    */
   async classify(file) {
-    const result = { mode: 'none', reason: 'no-file', file: null, repo: null, rel: null };
+    const result = { mode: 'none', reason: 'no-file', file: null, dir: null, name: null };
     if (!file) return result;
     result.file = file;
 
-    const repo = this.getAnnexRepo();
-    if (!repo) {
+    const root = this.getVaultRoot();
+    if (!root) {
       result.reason = 'no-vault';
       return result;
     }
 
-    if (!fs.existsSync(path.join(repo, '.git'))) {
-      result.reason = 'not-annex-repo';
-      return result;
-    }
-    result.repo = repo;
-
     const abs = this.absolutePath(file);
-    result.rel = this.repoRelativePath(abs, repo);
-    if (!result.rel) {
-      result.reason = 'outside-repo';
-      return result;
-    }
+    const dir = path.dirname(abs);
+    result.dir = dir;
+    result.name = path.basename(abs);
 
+    // A pointer file is cheap to spot from disk alone and is, by definition,
+    // git-annex content — no repository probe needed to offer a load.
     let isPointer = false;
     try {
       isPointer = fs.existsSync(abs) && isAnnexPointerFile(abs);
     } catch (err) {
       isPointer = false;
     }
-
     if (isPointer) {
       result.mode = 'load';
       result.reason = 'pointer';
       return result;
     }
 
-    // Real content on disk: a remote copy means it is safe to free locally.
+    // Real content on disk: it only makes sense to offer *free* inside an
+    // annex repository that tracks the file.
+    if (!(await isGitRepo(dir))) {
+      result.reason = 'not-git-repo';
+      return result;
+    }
+    if (!(await isAnnexRepo(dir))) {
+      result.reason = 'not-annex-repo';
+      return result;
+    }
+
     let whereisOutput = '';
     try {
-      const { stdout } = await run('git annex whereis --json ' + quoteArg(result.rel), repo);
+      const { stdout } = await run(git(dir, 'annex whereis --json ' + quoteArg(result.name)));
       whereisOutput = stdout;
     } catch (err) {
-      whereisOutput = '';
+      // git-annex errors for a file it does not track.
+      result.reason = 'not-tracked';
+      return result;
     }
+
     result.mode = annexState({ isPointer: false, whereisOutput });
     result.reason = 'whereis';
     return result;
@@ -426,12 +454,16 @@ class ObsidianAnnexPlugin extends Plugin {
       new Notice('Annex: vault path could not be determined (desktop adapter expected).');
       return;
     }
-    if (result.reason === 'not-annex-repo') {
-      new Notice('Annex: ' + this.describeRepo() + ' is not a git-annex repository (no .git found). Set the path in Settings → Annex.');
+    if (result.reason === 'not-git-repo') {
+      new Notice('Annex: "' + file.path + '" is not inside a git repository.');
       return;
     }
-    if (result.reason === 'outside-repo') {
-      new Notice('Annex: "' + file.path + '" is outside the annex repository (' + this.describeRepo() + ').');
+    if (result.reason === 'not-annex-repo') {
+      new Notice('Annex: "' + file.path + '" is not in a git-annex repository.');
+      return;
+    }
+    if (result.reason === 'not-tracked') {
+      new Notice('Annex: "' + file.path + '" is not tracked by git-annex.');
       return;
     }
 
@@ -444,14 +476,14 @@ class ObsidianAnnexPlugin extends Plugin {
     }
   }
 
-  async loadFile({ file, repo, rel }) {
+  async loadFile({ file, dir, name }) {
     this.busy = true;
     this.refreshToken += 1;
     this.showStatus(LABEL_LOADING);
     try {
-      await run('git annex get ' + quoteArg(rel), repo);
+      await run(git(dir, 'annex get ' + quoteArg(name)));
       this.loaded.add(file.path);
-      new Notice('Annex: loaded "' + rel + '".');
+      new Notice('Annex: loaded "' + name + '".');
       await this.reloadFile(file);
     } catch (error) {
       const detail = describeError(error);
@@ -463,15 +495,15 @@ class ObsidianAnnexPlugin extends Plugin {
     }
   }
 
-  async dropFile({ file, repo, rel }) {
+  async dropFile({ file, dir, name }) {
     this.busy = true;
     this.refreshToken += 1;
     this.showStatus(LABEL_DROPPING);
     try {
       // Deliberately no --force: a refusal is the safety net, not an error.
-      await run('git annex drop ' + quoteArg(rel), repo);
+      await run(git(dir, 'annex drop ' + quoteArg(name)));
       this.loaded.delete(file.path);
-      new Notice('Annex: freed "' + rel + '".');
+      new Notice('Annex: freed "' + name + '".');
       await this.reloadFile(file);
     } catch (error) {
       const detail = describeError(error);
@@ -486,12 +518,6 @@ class ObsidianAnnexPlugin extends Plugin {
   async dropAllLoaded() {
     if (this.busy) return;
 
-    const repo = this.getAnnexRepo();
-    if (!repo || !fs.existsSync(path.join(repo, '.git'))) {
-      new Notice('Annex: ' + this.describeRepo() + ' is not a git-annex repository (no .git found). Set the path in Settings → Annex.');
-      return;
-    }
-
     const vaultPaths = Array.from(this.loaded);
     if (!vaultPaths.length) {
       new Notice('Annex: nothing has been loaded this session.');
@@ -499,31 +525,54 @@ class ObsidianAnnexPlugin extends Plugin {
     }
 
     const root = this.getVaultRoot();
-    const rels = [];
-    for (const p of vaultPaths) {
-      const rel = this.repoRelativePath(path.join(root, p.split('/').join(path.sep)), repo);
-      if (rel) rels.push(rel);
-    }
-    if (!rels.length) {
-      new Notice('Annex: no files can be freed.');
+    if (!root) {
+      new Notice('Annex: vault path could not be determined (desktop adapter expected).');
       return;
+    }
+
+    // Group by folder so each repository/location is invoked once. Files from
+    // different annex repositories are handled independently.
+    const groups = new Map(); // dir -> { names: string[], paths: string[] }
+    for (const p of vaultPaths) {
+      const abs = path.join(root, p.split('/').join(path.sep));
+      const dir = path.dirname(abs);
+      const name = path.basename(abs);
+      let group = groups.get(dir);
+      if (!group) {
+        group = { names: [], paths: [] };
+        groups.set(dir, group);
+      }
+      group.names.push(name);
+      group.paths.push(p);
     }
 
     this.busy = true;
     this.refreshToken += 1;
     this.showStatus(LABEL_DROPPING);
+
+    let freed = 0;
+    const errors = [];
     try {
       // No --force here either.
-      await run('git annex drop ' + rels.map(quoteArg).join(' '), repo);
-      this.loaded.clear();
-      new Notice('Annex: freed ' + rels.length + ' file(s).');
-    } catch (error) {
-      const detail = describeError(error);
-      const hint = looksUnreachable(detail) ? 'remote unreachable? ' : '';
-      new Notice('Annex: free refused. ' + hint + detail, 12000);
+      for (const [dir, group] of groups) {
+        try {
+          await run(git(dir, 'annex drop ' + group.names.map(quoteArg).join(' ')));
+          freed += group.names.length;
+          for (const p of group.paths) this.loaded.delete(p);
+        } catch (error) {
+          errors.push(describeError(error));
+        }
+      }
     } finally {
       this.busy = false;
       await this.refreshStatus(this.app.workspace.getActiveFile());
+    }
+
+    if (!errors.length) {
+      new Notice('Annex: freed ' + freed + ' file(s).');
+    } else {
+      const hint = looksUnreachable(errors.join(' ')) ? 'remote unreachable? ' : '';
+      new Notice('Annex: freed ' + freed + ' file(s); some failed. ' + hint + errors[0], 12000);
     }
   }
 
@@ -549,78 +598,6 @@ class ObsidianAnnexPlugin extends Plugin {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Settings tab
-// ---------------------------------------------------------------------------
-
-class ObsidianAnnexSettingTab extends PluginSettingTab {
-  constructor(app, plugin) {
-    super(app, plugin);
-    this.plugin = plugin;
-  }
-
-  display() {
-    const { containerEl } = this;
-    containerEl.empty();
-
-    containerEl.createEl('h2', { text: 'Annex settings' });
-
-    new Setting(containerEl)
-      .setName('Annex repository path')
-      .setDesc(
-        'Folder holding the git-annex repository, relative to the vault root ' +
-          '(for example "annex" or "media"). Leave empty if the vault itself is ' +
-          'the annex repository. Absolute paths are also accepted.'
-      )
-      .addText((text) =>
-        text
-          .setPlaceholder('(vault root)')
-          .setValue(this.plugin.settings.annexRepoPath)
-          .onChange(async (value) => {
-            this.plugin.settings.annexRepoPath = value.trim();
-            await this.plugin.saveSettings();
-            this.plugin.refreshStatus(this.app.workspace.getActiveFile());
-          })
-      );
-  }
-}
-
-/** Shell-quote a single argument for `exec` (Windows and POSIX friendly). */
-function quoteArg(value) {
-  return '"' + String(value).replace(/"/g, '\\"') + '"';
-}
-
-/** Run a command through the shell and resolve with its output. */
-function run(command, cwd) {
-  return new Promise((resolve, reject) => {
-    exec(command, { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) {
-        error.stdout = stdout;
-        error.stderr = stderr;
-        reject(error);
-        return;
-      }
-      resolve({ stdout, stderr });
-    });
-  });
-}
-
-/** Condense a Node/git error into one readable line for a Notice. */
-function describeError(error) {
-  const parts = [];
-  if (error && error.stderr) parts.push(String(error.stderr).trim());
-  if (!parts.length && error && error.stdout) parts.push(String(error.stdout).trim());
-  if (!parts.length && error && error.message) parts.push(String(error.message).trim());
-  const detail = parts.join(' ').split(/\r?\n/).filter(Boolean).slice(-3).join(' ');
-  return detail || 'unknown error';
-}
-
-/** Does the failure look like the annex remote being unreachable? */
-function looksUnreachable(text) {
-  return /ssh|connect|connection|unreachable|timed? ?out|network|no route|host key|host is down|refused/i
-    .test(String(text));
-}
-
 module.exports = ObsidianAnnexPlugin;
 
 // The pure helpers are attached to the exported class so the test suite can
@@ -636,4 +613,3 @@ module.exports.STATE_NONE = STATE_NONE;
 module.exports.parseWhereisJson = parseWhereisJson;
 module.exports.hasRemoteCopy = hasRemoteCopy;
 module.exports.annexState = annexState;
-module.exports.DEFAULT_SETTINGS = DEFAULT_SETTINGS;
