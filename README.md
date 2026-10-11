@@ -67,8 +67,10 @@ hint when the failure looks like a connection problem).
 
 ## Requirements
 
-- **Obsidian desktop.** The plugin shells out to `git annex`, which needs Node's
-  `child_process`; it is marked `isDesktopOnly` and will not run on mobile.
+- **Obsidian desktop**, version 1.4.0 or newer. The plugin shells out to
+  `git annex`, which needs Node's `child_process`; it is marked `isDesktopOnly`
+  and will not run on mobile. See [Compatibility](#compatibility) for what that
+  version bound is (and is not) based on.
 - **`git` with the `git-annex` extension on your `PATH`.** `git annex whereis
   --json` must work (git-annex ≥ 5).
 - A **git-annex repository** somewhere above the files you open — the vault
@@ -166,6 +168,17 @@ node test/annex-state.test.js                 # load / drop / none mapping
 This plugin was built with AI (Letta Code & DeepSeek). I use it myself to
 handle my second-brain annex — it is not battle-tested by a wide user base.
 Open for feature requests, issues and bug reports.
+
+## Compatibility
+
+`minAppVersion` is set to **1.4.0**. That is an **assumption**, not a verified
+test: every Obsidian API this plugin uses dates from Obsidian's early days, so
+it *should* work on anything from 1.4.0 upward. It has been developed and tested
+on **1.14.4**.
+
+If you run it on an older version — whether it works or not — please
+[open an issue](https://github.com/rapus95/obsidian-annex/issues). That tells us
+whether the bound can be lowered, or has to be raised.
 
 ## License
 
