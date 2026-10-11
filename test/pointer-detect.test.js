@@ -14,7 +14,8 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const { isAnnexPointer, isAnnexPointerFile } = require('../pointer.js');
+// The plugin is a single self-contained file; the helpers hang off its export.
+const { isAnnexPointer, isAnnexPointerFile } = require('./load-plugin.js');
 
 const FIXTURES = path.join(__dirname, 'fixtures');
 

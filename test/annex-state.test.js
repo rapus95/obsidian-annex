@@ -12,7 +12,8 @@
 
 const assert = require('assert');
 
-const { annexState, parseWhereisJson, hasRemoteCopy } = require('../pointer.js');
+// The plugin is a single self-contained file; the helpers hang off its export.
+const { annexState, parseWhereisJson, hasRemoteCopy } = require('./load-plugin.js');
 
 let passed = 0;
 const failures = [];

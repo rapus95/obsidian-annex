@@ -48,9 +48,10 @@ Run the helper script from a PowerShell prompt (idempotent — safe to re-run):
 .\install.ps1
 ```
 
-It copies `manifest.json`, `main.js` and `pointer.js` into
+It copies the self-contained `manifest.json` and `main.js` into
 `C:\Users\Aaron\Assistant\.obsidian\plugins\annex-bridge\` (creating the folder
-if needed). Override the defaults if your vault lives elsewhere:
+if needed), and removes a stale `pointer.js` left by older versions. Override
+the defaults if your vault lives elsewhere:
 
 ```powershell
 .\install.ps1 -VaultRoot "D:\Vault"
@@ -61,8 +62,14 @@ restricted mode if necessary).
 
 ### Manual install
 
-Copy `manifest.json`, `main.js` and `pointer.js` into
+Copy `manifest.json` and `main.js` into
 `<vault>\.obsidian\plugins\annex-bridge\`.
+
+> **Why one file?** Obsidian loads plugins inside an Electron renderer
+> (`electron/js2c/renderer_init`), where a relative `require('./pointer.js')`
+> cannot be resolved — a split plugin fails to load with
+> `Cannot find module './pointer.js'`. `main.js` is therefore deliberately
+> self-contained; the pure helpers are exported off its class for the tests.
 
 ## Requirements
 
@@ -78,26 +85,28 @@ Copy `manifest.json`, `main.js` and `pointer.js` into
 ```
 annex-bridge/
 ├── manifest.json            Obsidian plugin manifest
-├── main.js                  plugin entry point (plain JS, no build step)
-├── pointer.js               pointer detection + action-state mapping
-│                            (dep-free, unit-tested)
+├── main.js                  the whole plugin: self-contained, no build step,
+│                            no relative require (pointer detection +
+│                            action-state mapping + the Plugin class)
 ├── install.ps1              installs into the vault's plugins folder
-├── test/
-│   ├── pointer-detect.test.js   standalone Node test — is this a pointer?
-│   ├── annex-state.test.js      standalone Node test — load / drop / none
-│   └── fixtures/
-│       ├── pointer.pdf          a real pointer file
-│       └── real.txt             ordinary content
-└── README.md
+└── test/
+    ├── pointer-detect.test.js   standalone Node test — is this a pointer?
+    ├── annex-state.test.js      standalone Node test — load / drop / none
+    ├── load-plugin.js           requires main.js under the obsidian stub
+    ├── stubs/obsidian.js        minimal `obsidian` stand-in for Node
+    └── fixtures/
+        ├── pointer.pdf          a real pointer file
+        └── real.txt             ordinary content
 ```
 
 ## Tests
 
-No Obsidian needed:
+No Obsidian needed. The tests load the *real* `main.js` with `require('obsidian')`
+redirected to `test/stubs/obsidian.js`, so they also guard that the plugin stays
+a single self-contained file:
 
 ```powershell
 node --check main.js                          # syntax check
-node --check pointer.js
 node test\pointer-detect.test.js              # detection
 node test\annex-state.test.js                 # load/drop/none mapping
 ```
