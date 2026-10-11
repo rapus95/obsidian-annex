@@ -176,9 +176,8 @@ in 1.4.0 with matching signatures — verified against the type definitions in
 [`obsidianmd/obsidian-api`](https://github.com/obsidianmd/obsidian-api) at
 commit `90517f4` ("Release for 1.4.0").
 
-The earliest API-repo commit that contains every API used here is `06510d0`
-(v0.9.11, 2020-11-08), so 1.4.0 is a conservative bound rather than a measured
-minimum. Development and testing happened on **1.14.4**.
+Earlier versions are most probably compatible too — the APIs are old — but that
+has not been tested. Development and testing happened on **1.14.4**.
 
 If you run it on an older version — whether it works or not — please
 [open an issue](https://github.com/rapus95/obsidian-annex/issues). That tells us
