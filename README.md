@@ -1,37 +1,44 @@
 # Annex Bridge
 
-An Obsidian plugin that loads **git-annex** pointer files on demand.
+An Obsidian plugin that loads **and frees** git-annex content on demand.
 
 The vault is `C:\Users\Aaron\Assistant\`; the git-annex repository is the
 `brain/` subfolder. Files whose content is only a small git-annex *pointer*
 (their content starts with `/annex/objects/`) are not present on disk until they
-are fetched. Annex Bridge watches for those files and offers a one-click way to
-materialise them.
+are fetched. Annex Bridge gives you a single status-bar **toggle** that always
+does the right thing for the file you are looking at.
 
-## What it does
+## The toggle
 
-- **Detects pointers.** When you open a file that is a git-annex pointer, a
-  status-bar item appears at the bottom: **`⬇ Annex: laden`**. Real content
-  (non-pointers) leaves the status bar hidden. The plugin only reads the first
-  ~100 bytes of a file, never the whole thing.
-- **Loads on click.** Clicking the status-bar item runs
-  `git annex get "<relative-path>"` inside `brain/` and then reloads the file so
-  the real content shows up.
-- **Progress + errors.** While loading, the item shows `⏳ Annex: lädt …`. On
-  failure you get an Obsidian `Notice` with the error (including a
-  “Raspi nicht erreichbar?” hint when the failure looks like an unreachable
-  remote).
-- **Free the disk again.** Everything loaded in the current session is tracked in
-  memory; the *Annex: geladene Dateien freigeben* command drops all of it.
+One status-bar item, whose label and click action depend on the open file:
+
+| File state | Status bar shows | Click does |
+| --- | --- | --- |
+| **Pointer** (content starts with `/annex/objects/`) | `⬇ Annex: laden` | `git annex get` — fetch and reload |
+| **Real file**, and a copy exists on a remote (Raspi) | `⬆ Annex: freigeben` | `git annex drop` — free the local copy |
+| **Real file**, but it is the *only* copy | *(hidden)* | — |
+| Not an annexed file at all | *(hidden)* | — |
+
+How it decides: the plugin reads only the first ~100 bytes of the file to spot a
+pointer; for real files it asks
+`git annex whereis --json <path>` and offers *freigeben* only when a location
+other than `here` holds a copy. That is a **safety rule**: the last copy is never
+offered for dropping, and `git annex drop` is **never** run with `--force` — if
+git-annex refuses, the refusal is shown in a `Notice` instead of being worked
+around.
+
+While an action runs, the item shows `⏳ Annex: lädt …` / `⏳ Annex: gibt frei …`.
+On failure you get a `Notice` with the error (including a “Raspi nicht
+erreichbar?” hint when the failure looks like an unreachable remote).
 
 ## Commands
 
-Both are available in the command palette (`Ctrl+P`):
+Available in the command palette (`Ctrl+P`):
 
 | Command | What it does |
 | --- | --- |
-| `Annex: aktuelle Datei laden` | `git annex get` on `app.workspace.getActiveFile()` and reload it. No path prompt. |
-| `Annex: geladene Dateien freigeben` | `git annex drop` on every file loaded during this session. |
+| `Annex: umschalten (laden/freigeben)` | Same context logic as the status-bar click, on `app.workspace.getActiveFile()`. No path prompt. |
+| `Annex: alle geladenen freigeben` | `git annex drop` on every file loaded during this session (kept in an in-memory list). |
 
 ## Install
 
@@ -61,7 +68,8 @@ Copy `manifest.json`, `main.js` and `pointer.js` into
 
 - Obsidian **desktop** (the plugin uses Node's `child_process`; `isDesktopOnly`
   is `true`).
-- `git` with the **git-annex** extension on `PATH`.
+- `git` with the **git-annex** extension on `PATH`. `git annex whereis --json`
+  is required (git-annex ≥ 5; verified on 10.20261006).
 - The vault contains a `brain/` directory that is a git-annex repository. If it
   is not, the plugin shows a clear `Notice` instead of failing silently.
 
@@ -71,10 +79,12 @@ Copy `manifest.json`, `main.js` and `pointer.js` into
 annex-bridge/
 ├── manifest.json            Obsidian plugin manifest
 ├── main.js                  plugin entry point (plain JS, no build step)
-├── pointer.js               git-annex pointer detection (dep-free, unit-tested)
+├── pointer.js               pointer detection + action-state mapping
+│                            (dep-free, unit-tested)
 ├── install.ps1              installs into the vault's plugins folder
 ├── test/
-│   ├── pointer-detect.test.js   standalone Node test
+│   ├── pointer-detect.test.js   standalone Node test — is this a pointer?
+│   ├── annex-state.test.js      standalone Node test — load / drop / none
 │   └── fixtures/
 │       ├── pointer.pdf          a real pointer file
 │       └── real.txt             ordinary content
@@ -86,16 +96,23 @@ annex-bridge/
 No Obsidian needed:
 
 ```powershell
-node --check main.js                     # syntax check
-node test\pointer-detect.test.js         # detection unit test
+node --check main.js                          # syntax check
+node --check pointer.js
+node test\pointer-detect.test.js              # detection
+node test\annex-state.test.js                 # load/drop/none mapping
 ```
 
-The detection test proves the predicate **fails on real content and passes on a
-pointer**, both for in-memory strings and for on-disk fixtures.
+`annexState({ isPointer, whereisOutput })` is a pure function, so the four states
+above are covered without a repository, a remote, or a network. The tests also
+prove the detection predicate fails on real content and passes on a pointer.
 
 ## Notes / limitations
 
 - The loaded-files list is in-memory only; reloading Obsidian forgets it (by
   design — it describes *this session*).
-- Binary viewers (PDF, images) are refreshed by re-opening the leaf; if a viewer
-  still shows stale bytes, close and reopen the file.
+- Deciding *freigeben* costs one `git annex whereis --json` call per opened real
+  file.
+- Binary viewers (PDF, images) are refreshed by re-opening the leaf; after a
+  `drop` the file becomes a pointer again, so a viewer will show it as such
+  until it is loaded again.
+- If a viewer still shows stale bytes, close and reopen the file.

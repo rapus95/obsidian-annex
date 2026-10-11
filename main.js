@@ -1,13 +1,22 @@
 'use strict';
 
 /**
- * Annex Bridge — an Obsidian plugin that loads git-annex pointer files on demand.
+ * Annex Bridge — an Obsidian plugin that loads and frees git-annex content.
  *
  * The vault root is the Obsidian vault (e.g. C:\Users\Aaron\Assistant). The
- * git-annex repository lives in the `brain/` subfolder of that vault. When a
- * file that is a git-annex pointer is opened, a status-bar item appears;
- * clicking it (or running the "Annex: aktuelle Datei laden" command) fetches the
- * real content with `git annex get` and reloads the file.
+ * git-annex repository lives in the `brain/` subfolder of that vault.
+ *
+ * The plugin exposes a single status-bar *toggle* whose meaning depends on the
+ * file that is open:
+ *
+ *   pointer file            -> "⬇ Annex: laden"        -> `git annex get`
+ *   real file, copy elsewhere -> "⬆ Annex: freigeben"  -> `git annex drop`
+ *   real file, only copy    -> hidden (never drop the last copy)
+ *   not an annexed file     -> hidden
+ *
+ * `drop` is never run with `--force`: when git-annex refuses (e.g. it would
+ * remove the last copy), the refusal is surfaced in a Notice instead of being
+ * worked around.
  *
  * Plain JavaScript, no build step — Obsidian loads this file directly.
  */
@@ -17,19 +26,21 @@ const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const { isAnnexPointerFile } = require('./pointer.js');
+const { isAnnexPointerFile, annexState } = require('./pointer.js');
 
 /** Name of the git-annex repository relative to the vault root. */
 const ANNEX_DIR = 'brain';
 
 /** Status bar labels. */
-const LABEL_IDLE = '⬇ Annex: laden';
-const LABEL_BUSY = '⏳ Annex: lädt …';
+const LABEL_LOAD = '⬇ Annex: laden';
+const LABEL_DROP = '⬆ Annex: freigeben';
+const LABEL_LOADING = '⏳ Annex: lädt …';
+const LABEL_DROPPING = '⏳ Annex: gibt frei …';
 
 /**
  * Extensions we are confident can be re-written through the vault API without
  * corrupting bytes. Anything else (PDF, images, …) is reloaded by re-opening
- * the leaf instead, so the viewer re-reads the now-materialised file from disk.
+ * the leaf instead, so the viewer re-reads the now-changed file from disk.
  */
 const TEXT_EXTENSIONS = new Set([
   'md', 'markdown', 'txt', 'json', 'canvas', 'base', 'csv', 'html', 'htm',
@@ -76,24 +87,26 @@ module.exports = class AnnexBridgePlugin extends Plugin {
   async onload() {
     this.loaded = new Set();   // vault-relative paths loaded during this session
     this.busy = false;
+    this.mode = 'none';        // 'load' | 'drop' | 'none'
     this.currentFile = null;
+    this.refreshToken = 0;     // guards against stale async refreshes
 
     this.statusBarEl = this.addStatusBarItem();
     this.statusBarEl.addClass('annex-bridge-status');
     this.statusBarEl.style.cursor = 'pointer';
-    this.statusBarEl.addEventListener('click', () => this.loadCurrentFile());
+    this.statusBarEl.addEventListener('click', () => this.toggleCurrentFile());
     this.hideStatus();
 
     this.addCommand({
-      id: 'annex-load-current-file',
-      name: 'Annex: aktuelle Datei laden',
-      callback: () => this.loadCurrentFile(),
+      id: 'annex-toggle-current-file',
+      name: 'Annex: umschalten (laden/freigeben)',
+      callback: () => this.toggleCurrentFile(),
     });
 
     this.addCommand({
-      id: 'annex-drop-loaded-files',
-      name: 'Annex: geladene Dateien freigeben',
-      callback: () => this.dropLoadedFiles(),
+      id: 'annex-drop-all-loaded',
+      name: 'Annex: alle geladenen freigeben',
+      callback: () => this.dropAllLoaded(),
     });
 
     this.registerEvent(
@@ -121,21 +134,6 @@ module.exports = class AnnexBridgePlugin extends Plugin {
     return adapter && adapter.basePath;
   }
 
-  /** Absolute path of the annex repository, or null when it is not one. */
-  resolveAnnexRepo() {
-    const root = this.getVaultRoot();
-    if (!root) {
-      new Notice('Annex Bridge: Vault-Pfad konnte nicht ermittelt werden (Desktop-Adapter erwartet).');
-      return null;
-    }
-    const repo = path.join(root, ANNEX_DIR);
-    if (!fs.existsSync(path.join(repo, '.git'))) {
-      new Notice('Annex Bridge: ' + ANNEX_DIR + '/ ist kein git-annex-Repository (kein .git gefunden).');
-      return null;
-    }
-    return repo;
-  }
-
   absolutePath(file) {
     const root = this.getVaultRoot();
     return path.join(root, file.path.split('/').join(path.sep));
@@ -146,6 +144,63 @@ module.exports = class AnnexBridgePlugin extends Plugin {
     const rel = path.relative(repo, absPath);
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
     return rel.split(path.sep).join('/');
+  }
+
+  // -- classification -------------------------------------------------------
+
+  /**
+   * Inspect `file` and decide which action applies. Quiet: never raises a
+   * Notice, never throws. Returns `{ mode, reason, file, repo, rel }`.
+   */
+  async classify(file) {
+    const result = { mode: 'none', reason: 'no-file', file: null, repo: null, rel: null };
+    if (!file) return result;
+    result.file = file;
+
+    const root = this.getVaultRoot();
+    if (!root) {
+      result.reason = 'no-vault';
+      return result;
+    }
+
+    const repo = path.join(root, ANNEX_DIR);
+    if (!fs.existsSync(path.join(repo, '.git'))) {
+      result.reason = 'not-annex-repo';
+      return result;
+    }
+    result.repo = repo;
+
+    const abs = this.absolutePath(file);
+    result.rel = this.repoRelativePath(abs, repo);
+    if (!result.rel) {
+      result.reason = 'outside-repo';
+      return result;
+    }
+
+    let isPointer = false;
+    try {
+      isPointer = fs.existsSync(abs) && isAnnexPointerFile(abs);
+    } catch (err) {
+      isPointer = false;
+    }
+
+    if (isPointer) {
+      result.mode = 'load';
+      result.reason = 'pointer';
+      return result;
+    }
+
+    // Real content on disk: a remote copy means it is safe to free locally.
+    let whereisOutput = '';
+    try {
+      const { stdout } = await run('git annex whereis --json ' + quoteArg(result.rel), repo);
+      whereisOutput = stdout;
+    } catch (err) {
+      whereisOutput = '';
+    }
+    result.mode = annexState({ isPointer: false, whereisOutput });
+    result.reason = 'whereis';
+    return result;
   }
 
   // -- status bar -----------------------------------------------------------
@@ -159,71 +214,66 @@ module.exports = class AnnexBridgePlugin extends Plugin {
     this.statusBarEl.style.display = 'none';
   }
 
-  refreshStatus(file) {
+  applyMode(mode) {
+    this.mode = mode;
+    if (mode === 'load') this.showStatus(LABEL_LOAD);
+    else if (mode === 'drop') this.showStatus(LABEL_DROP);
+    else this.hideStatus();
+  }
+
+  /** Re-evaluate the open file and update the toggle. */
+  async refreshStatus(file) {
     if (this.busy) return;
-    if (!file) {
-      this.hideStatus();
-      return;
-    }
-    const root = this.getVaultRoot();
-    if (!root) {
-      this.hideStatus();
-      return;
-    }
-    const abs = this.absolutePath(file);
-    let pointer = false;
+    const token = ++this.refreshToken;
+    let result;
     try {
-      pointer = fs.existsSync(abs) && isAnnexPointerFile(abs);
+      result = await this.classify(file);
     } catch (err) {
-      pointer = false;
+      result = { mode: 'none' };
     }
-    if (pointer) {
-      this.showStatus(LABEL_IDLE);
-    } else {
-      this.hideStatus();
-    }
+    if (token !== this.refreshToken || this.busy) return;
+    this.applyMode(result.mode);
   }
 
   // -- commands -------------------------------------------------------------
 
-  async loadCurrentFile() {
+  /** The toggle: load the pointer, or free the real file, depending on state. */
+  async toggleCurrentFile() {
     if (this.busy) return;
     const file = this.currentFile || this.app.workspace.getActiveFile();
     if (!file) {
       new Notice('Annex Bridge: keine aktive Datei.');
       return;
     }
-    const root = this.getVaultRoot();
-    if (root) {
-      const abs = this.absolutePath(file);
-      let pointer = false;
-      try {
-        pointer = fs.existsSync(abs) && isAnnexPointerFile(abs);
-      } catch (err) {
-        pointer = false;
-      }
-      if (!pointer) {
-        new Notice('Annex Bridge: „' + file.path + '" ist keine git-annex-Pointer-Datei.');
-        return;
-      }
+
+    const result = await this.classify(file);
+
+    if (result.reason === 'no-vault') {
+      new Notice('Annex Bridge: Vault-Pfad konnte nicht ermittelt werden (Desktop-Adapter erwartet).');
+      return;
     }
-    await this.loadFile(file);
-  }
-
-  async loadFile(file) {
-    const repo = this.resolveAnnexRepo();
-    if (!repo) return;
-
-    const abs = this.absolutePath(file);
-    const rel = this.repoRelativePath(abs, repo);
-    if (!rel) {
+    if (result.reason === 'not-annex-repo') {
+      new Notice('Annex Bridge: ' + ANNEX_DIR + '/ ist kein git-annex-Repository (kein .git gefunden).');
+      return;
+    }
+    if (result.reason === 'outside-repo') {
       new Notice('Annex Bridge: „' + file.path + '" liegt außerhalb von ' + ANNEX_DIR + '/.');
       return;
     }
 
-    this.busy = true;
-    this.showStatus(LABEL_BUSY);
+    if (result.mode === 'load') {
+      await this.loadFile(result);
+    } else if (result.mode === 'drop') {
+      await this.dropFile(result);
+    } else {
+      new Notice('Annex Bridge: nichts zu tun für „' + file.path + '" (keine Annex-Datei oder einzige Kopie).');
+    }
+  }
 
+  async loadFile({ file, repo, rel }) {
+    this.busy = true;
+    this.refreshToken += 1;
+    this.showStatus(LABEL_LOADING);
     try {
       await run('git annex get ' + quoteArg(rel), repo);
       this.loaded.add(file.path);
@@ -232,17 +282,42 @@ module.exports = class AnnexBridgePlugin extends Plugin {
     } catch (error) {
       const detail = describeError(error);
       const hint = looksUnreachable(detail) ? 'Raspi nicht erreichbar? ' : '';
-      new Notice('Annex Bridge: Laden fehlgeschlagen. ' + hint + detail, 10000);
+      new Notice('Annex Bridge: Laden fehlgeschlagen. ' + hint + detail, 12000);
     } finally {
       this.busy = false;
-      this.refreshStatus(this.app.workspace.getActiveFile());
+      await this.refreshStatus(this.app.workspace.getActiveFile());
     }
   }
 
-  async dropLoadedFiles() {
+  async dropFile({ file, repo, rel }) {
+    this.busy = true;
+    this.refreshToken += 1;
+    this.showStatus(LABEL_DROPPING);
+    try {
+      // Deliberately no --force: a refusal is the safety net, not an error.
+      await run('git annex drop ' + quoteArg(rel), repo);
+      this.loaded.delete(file.path);
+      new Notice('Annex Bridge: „' + rel + '" freigegeben.');
+      await this.reloadFile(file);
+    } catch (error) {
+      const detail = describeError(error);
+      const hint = looksUnreachable(detail) ? 'Raspi nicht erreichbar? ' : '';
+      new Notice('Annex Bridge: Freigeben abgelehnt. ' + hint + detail, 12000);
+    } finally {
+      this.busy = false;
+      await this.refreshStatus(this.app.workspace.getActiveFile());
+    }
+  }
+
+  async dropAllLoaded() {
     if (this.busy) return;
-    const repo = this.resolveAnnexRepo();
-    if (!repo) return;
+
+    const root = this.getVaultRoot();
+    const repo = root ? path.join(root, ANNEX_DIR) : null;
+    if (!repo || !fs.existsSync(path.join(repo, '.git'))) {
+      new Notice('Annex Bridge: ' + ANNEX_DIR + '/ ist kein git-annex-Repository (kein .git gefunden).');
+      return;
+    }
 
     const vaultPaths = Array.from(this.loaded);
     if (!vaultPaths.length) {
@@ -250,7 +325,6 @@ module.exports = class AnnexBridgePlugin extends Plugin {
       return;
     }
 
-    const root = this.getVaultRoot();
     const rels = [];
     for (const p of vaultPaths) {
       const rel = this.repoRelativePath(path.join(root, p.split('/').join(path.sep)), repo);
@@ -262,17 +336,20 @@ module.exports = class AnnexBridgePlugin extends Plugin {
     }
 
     this.busy = true;
+    this.refreshToken += 1;
+    this.showStatus(LABEL_DROPPING);
     try {
+      // No --force here either.
       await run('git annex drop ' + rels.map(quoteArg).join(' '), repo);
       this.loaded.clear();
       new Notice('Annex Bridge: ' + rels.length + ' Datei(en) freigegeben.');
     } catch (error) {
       const detail = describeError(error);
       const hint = looksUnreachable(detail) ? 'Raspi nicht erreichbar? ' : '';
-      new Notice('Annex Bridge: Freigeben fehlgeschlagen. ' + hint + detail, 10000);
+      new Notice('Annex Bridge: Freigeben abgelehnt. ' + hint + detail, 12000);
     } finally {
       this.busy = false;
-      this.refreshStatus(this.app.workspace.getActiveFile());
+      await this.refreshStatus(this.app.workspace.getActiveFile());
     }
   }
 
@@ -292,8 +369,8 @@ module.exports = class AnnexBridgePlugin extends Plugin {
         if (leaf) await leaf.openFile(file, { active: true });
       }
     } catch (err) {
-      // Never let a reload failure mask a successful `git annex get`.
-      new Notice('Annex Bridge: Datei geladen, Ansicht konnte nicht aktualisiert werden: ' + describeError(err));
+      // Never let a reload failure mask a successful annex operation.
+      new Notice('Annex Bridge: Annex-Aktion ok, Ansicht konnte nicht aktualisiert werden: ' + describeError(err));
     }
   }
 };
