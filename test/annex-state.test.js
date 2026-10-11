@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Standalone tests for the Annex Bridge *action state* mapping.
+ * Standalone tests for the Obsidian Annex *action state* mapping.
  *
  * Runs with plain Node (no Obsidian, no test framework):
  *     node test/annex-state.test.js

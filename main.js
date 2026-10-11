@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Annex Bridge — an Obsidian plugin that loads and frees git-annex content.
+ * Obsidian Annex — an Obsidian plugin that loads and frees git-annex content.
  *
  * SINGLE FILE ON PURPOSE. Obsidian runs plugins inside an Electron renderer
  * (`electron/js2c/renderer_init`), where a relative `require('./pointer.js')`
@@ -249,7 +249,7 @@ function looksUnreachable(text) {
 // Plugin
 // ---------------------------------------------------------------------------
 
-class AnnexBridgePlugin extends Plugin {
+class ObsidianAnnexPlugin extends Plugin {
   async onload() {
     this.loaded = new Set();   // vault-relative paths loaded during this session
     this.busy = false;
@@ -258,7 +258,7 @@ class AnnexBridgePlugin extends Plugin {
     this.refreshToken = 0;     // guards against stale async refreshes
 
     this.statusBarEl = this.addStatusBarItem();
-    this.statusBarEl.addClass('annex-bridge-status');
+    this.statusBarEl.addClass('obsidian-annex-status');
     this.statusBarEl.style.cursor = 'pointer';
     this.statusBarEl.addEventListener('click', () => this.toggleCurrentFile());
     this.hideStatus();
@@ -408,22 +408,22 @@ class AnnexBridgePlugin extends Plugin {
     if (this.busy) return;
     const file = this.currentFile || this.app.workspace.getActiveFile();
     if (!file) {
-      new Notice('Annex Bridge: keine aktive Datei.');
+      new Notice('Obsidian Annex: keine aktive Datei.');
       return;
     }
 
     const result = await this.classify(file);
 
     if (result.reason === 'no-vault') {
-      new Notice('Annex Bridge: Vault-Pfad konnte nicht ermittelt werden (Desktop-Adapter erwartet).');
+      new Notice('Obsidian Annex: Vault-Pfad konnte nicht ermittelt werden (Desktop-Adapter erwartet).');
       return;
     }
     if (result.reason === 'not-annex-repo') {
-      new Notice('Annex Bridge: ' + ANNEX_DIR + '/ ist kein git-annex-Repository (kein .git gefunden).');
+      new Notice('Obsidian Annex: ' + ANNEX_DIR + '/ ist kein git-annex-Repository (kein .git gefunden).');
       return;
     }
     if (result.reason === 'outside-repo') {
-      new Notice('Annex Bridge: „' + file.path + '" liegt außerhalb von ' + ANNEX_DIR + '/.');
+      new Notice('Obsidian Annex: „' + file.path + '" liegt außerhalb von ' + ANNEX_DIR + '/.');
       return;
     }
 
@@ -432,7 +432,7 @@ class AnnexBridgePlugin extends Plugin {
     } else if (result.mode === 'drop') {
       await this.dropFile(result);
     } else {
-      new Notice('Annex Bridge: nichts zu tun für „' + file.path + '" (keine Annex-Datei oder einzige Kopie).');
+      new Notice('Obsidian Annex: nichts zu tun für „' + file.path + '" (keine Annex-Datei oder einzige Kopie).');
     }
   }
 
@@ -443,12 +443,12 @@ class AnnexBridgePlugin extends Plugin {
     try {
       await run('git annex get ' + quoteArg(rel), repo);
       this.loaded.add(file.path);
-      new Notice('Annex Bridge: „' + rel + '" geladen.');
+      new Notice('Obsidian Annex: „' + rel + '" geladen.');
       await this.reloadFile(file);
     } catch (error) {
       const detail = describeError(error);
       const hint = looksUnreachable(detail) ? 'Raspi nicht erreichbar? ' : '';
-      new Notice('Annex Bridge: Laden fehlgeschlagen. ' + hint + detail, 12000);
+      new Notice('Obsidian Annex: Laden fehlgeschlagen. ' + hint + detail, 12000);
     } finally {
       this.busy = false;
       await this.refreshStatus(this.app.workspace.getActiveFile());
@@ -463,12 +463,12 @@ class AnnexBridgePlugin extends Plugin {
       // Deliberately no --force: a refusal is the safety net, not an error.
       await run('git annex drop ' + quoteArg(rel), repo);
       this.loaded.delete(file.path);
-      new Notice('Annex Bridge: „' + rel + '" freigegeben.');
+      new Notice('Obsidian Annex: „' + rel + '" freigegeben.');
       await this.reloadFile(file);
     } catch (error) {
       const detail = describeError(error);
       const hint = looksUnreachable(detail) ? 'Raspi nicht erreichbar? ' : '';
-      new Notice('Annex Bridge: Freigeben abgelehnt. ' + hint + detail, 12000);
+      new Notice('Obsidian Annex: Freigeben abgelehnt. ' + hint + detail, 12000);
     } finally {
       this.busy = false;
       await this.refreshStatus(this.app.workspace.getActiveFile());
@@ -481,13 +481,13 @@ class AnnexBridgePlugin extends Plugin {
     const root = this.getVaultRoot();
     const repo = root ? path.join(root, ANNEX_DIR) : null;
     if (!repo || !fs.existsSync(path.join(repo, '.git'))) {
-      new Notice('Annex Bridge: ' + ANNEX_DIR + '/ ist kein git-annex-Repository (kein .git gefunden).');
+      new Notice('Obsidian Annex: ' + ANNEX_DIR + '/ ist kein git-annex-Repository (kein .git gefunden).');
       return;
     }
 
     const vaultPaths = Array.from(this.loaded);
     if (!vaultPaths.length) {
-      new Notice('Annex Bridge: in dieser Sitzung wurde noch nichts geladen.');
+      new Notice('Obsidian Annex: in dieser Sitzung wurde noch nichts geladen.');
       return;
     }
 
@@ -497,7 +497,7 @@ class AnnexBridgePlugin extends Plugin {
       if (rel) rels.push(rel);
     }
     if (!rels.length) {
-      new Notice('Annex Bridge: keine freigebbaren Dateien.');
+      new Notice('Obsidian Annex: keine freigebbaren Dateien.');
       return;
     }
 
@@ -508,11 +508,11 @@ class AnnexBridgePlugin extends Plugin {
       // No --force here either.
       await run('git annex drop ' + rels.map(quoteArg).join(' '), repo);
       this.loaded.clear();
-      new Notice('Annex Bridge: ' + rels.length + ' Datei(en) freigegeben.');
+      new Notice('Obsidian Annex: ' + rels.length + ' Datei(en) freigegeben.');
     } catch (error) {
       const detail = describeError(error);
       const hint = looksUnreachable(detail) ? 'Raspi nicht erreichbar? ' : '';
-      new Notice('Annex Bridge: Freigeben abgelehnt. ' + hint + detail, 12000);
+      new Notice('Obsidian Annex: Freigeben abgelehnt. ' + hint + detail, 12000);
     } finally {
       this.busy = false;
       await this.refreshStatus(this.app.workspace.getActiveFile());
@@ -536,12 +536,12 @@ class AnnexBridgePlugin extends Plugin {
       }
     } catch (err) {
       // Never let a reload failure mask a successful annex operation.
-      new Notice('Annex Bridge: Annex-Aktion ok, Ansicht konnte nicht aktualisiert werden: ' + describeError(err));
+      new Notice('Obsidian Annex: Annex-Aktion ok, Ansicht konnte nicht aktualisiert werden: ' + describeError(err));
     }
   }
 }
 
-module.exports = AnnexBridgePlugin;
+module.exports = ObsidianAnnexPlugin;
 
 // The pure helpers are attached to the exported class so the test suite can
 // reach them without a build step and without a second source file.

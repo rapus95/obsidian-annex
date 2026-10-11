@@ -1,11 +1,11 @@
-# Annex Bridge
+# Obsidian Annex
 
 An Obsidian plugin that loads **and frees** git-annex content on demand.
 
 The vault is `C:\Users\Aaron\Assistant\`; the git-annex repository is the
 `brain/` subfolder. Files whose content is only a small git-annex *pointer*
 (their content starts with `/annex/objects/`) are not present on disk until they
-are fetched. Annex Bridge gives you a single status-bar **toggle** that always
+are fetched. Obsidian Annex gives you a single status-bar **toggle** that always
 does the right thing for the file you are looking at.
 
 ## The toggle
@@ -49,21 +49,23 @@ Run the helper script from a PowerShell prompt (idempotent — safe to re-run):
 ```
 
 It copies the self-contained `manifest.json` and `main.js` into
-`C:\Users\Aaron\Assistant\.obsidian\plugins\annex-bridge\` (creating the folder
-if needed), and removes a stale `pointer.js` left by older versions. Override
+`C:\Users\Aaron\Assistant\.obsidian\plugins\obsidian-annex\` (creating the folder
+if needed), removes a stale `pointer.js` left by older versions, and removes the
+pre-rename `annex-bridge` folder so the vault does not carry two copies. Override
 the defaults if your vault lives elsewhere:
 
 ```powershell
 .\install.ps1 -VaultRoot "D:\Vault"
 ```
 
-Then enable **Annex Bridge** in *Settings → Community plugins* (turn off
-restricted mode if necessary).
+Then enable **Obsidian Annex** in *Settings → Community plugins* (turn off
+restricted mode if necessary). After a rename you may need to re-enable the
+plugin.
 
 ### Manual install
 
 Copy `manifest.json` and `main.js` into
-`<vault>\.obsidian\plugins\annex-bridge\`.
+`<vault>\.obsidian\plugins\obsidian-annex\`.
 
 > **Why one file?** Obsidian loads plugins inside an Electron renderer
 > (`electron/js2c/renderer_init`), where a relative `require('./pointer.js')`
@@ -83,7 +85,7 @@ Copy `manifest.json` and `main.js` into
 ## Files
 
 ```
-annex-bridge/
+obsidian-annex/
 ├── manifest.json            Obsidian plugin manifest
 ├── main.js                  the whole plugin: self-contained, no build step,
 │                            no relative require (pointer detection +

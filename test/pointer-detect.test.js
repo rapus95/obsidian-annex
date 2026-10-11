@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Standalone test for the git-annex pointer detection used by Annex Bridge.
+ * Standalone test for the git-annex pointer detection used by Obsidian Annex.
  *
  * Runs with plain Node (no Obsidian, no test framework):
  *     node test/pointer-detect.test.js

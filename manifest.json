@@ -1,6 +1,6 @@
 {
-  "id": "annex-bridge",
-  "name": "Annex Bridge",
+  "id": "obsidian-annex",
+  "name": "Obsidian Annex",
   "version": "0.1.0",
   "minAppVersion": "1.4.0",
   "description": "Lädt git-annex Pointer-Dateien bei Bedarf aus dem brain/ Annex-Repository.",
