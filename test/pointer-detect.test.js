@@ -51,7 +51,7 @@ check('bare pointer key is detected', () => {
 
 check('real text content is NOT a pointer', () => {
   assert.strictEqual(
-    isAnnexPointer('# Kapitel 1\n\nDies ist echter Inhalt, kein Annex-Pointer.\n'),
+    isAnnexPointer('# Chapter 1\n\nThis is real content, not an annex pointer.\n'),
     false
   );
 });

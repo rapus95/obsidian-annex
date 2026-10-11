@@ -9,23 +9,24 @@
  * the pure helpers at the top are also hung off the exported class so the test
  * suite can exercise them without a build step.
  *
- * The vault root is the Obsidian vault (e.g. C:\Users\Aaron\Assistant). The
- * git-annex repository lives in the `brain/` subfolder of that vault.
+ * The git-annex repository may be the vault itself or any folder inside it
+ * (configured under Settings → Obsidian Annex). Paths are resolved from the
+ * vault root at runtime, so nothing here depends on where the vault lives.
  *
  * The plugin exposes a single status-bar *toggle* whose meaning depends on the
  * file that is open:
  *
- *   pointer file            -> "⬇ Annex: laden"        -> `git annex get`
- *   real file, copy elsewhere -> "⬆ Annex: freigeben"  -> `git annex drop`
- *   real file, only copy    -> hidden (never drop the last copy)
- *   not an annexed file     -> hidden
+ *   pointer file              -> "⬇ Annex: load"    -> `git annex get`
+ *   real file, copy elsewhere -> "⬆ Annex: free"    -> `git annex drop`
+ *   real file, only copy      -> hidden (never drop the last copy)
+ *   not an annexed file       -> hidden
  *
  * `drop` is never run with `--force`: when git-annex refuses (e.g. it would
  * remove the last copy), the refusal is surfaced in a Notice instead of being
  * worked around.
  */
 
-const { Plugin, Notice } = require('obsidian');
+const { Plugin, PluginSettingTab, Setting, Notice } = require('obsidian');
 const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -190,14 +191,11 @@ function annexState(input) {
 // Shell helpers
 // ---------------------------------------------------------------------------
 
-/** Name of the git-annex repository relative to the vault root. */
-const ANNEX_DIR = 'brain';
-
 /** Status bar labels. */
-const LABEL_LOAD = '⬇ Annex: laden';
-const LABEL_DROP = '⬆ Annex: freigeben';
-const LABEL_LOADING = '⏳ Annex: lädt …';
-const LABEL_DROPPING = '⏳ Annex: gibt frei …';
+const LABEL_LOAD = '⬇ Annex: load';
+const LABEL_DROP = '⬆ Annex: free';
+const LABEL_LOADING = '⏳ Annex: loading…';
+const LABEL_DROPPING = '⏳ Annex: freeing…';
 
 /**
  * Extensions we are confident can be re-written through the vault API without
@@ -209,41 +207,19 @@ const TEXT_EXTENSIONS = new Set([
   'css', 'js', 'ts', 'yaml', 'yml',
 ]);
 
-/** Shell-quote a single argument for `exec` (Windows and POSIX friendly). */
-function quoteArg(value) {
-  return '"' + String(value).replace(/"/g, '\\"') + '"';
-}
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
 
-/** Run a command through the shell and resolve with its output. */
-function run(command, cwd) {
-  return new Promise((resolve, reject) => {
-    exec(command, { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) {
-        error.stdout = stdout;
-        error.stderr = stderr;
-        reject(error);
-        return;
-      }
-      resolve({ stdout, stderr });
-    });
-  });
-}
-
-/** Condense a Node/git error into one readable line for a Notice. */
-function describeError(error) {
-  const parts = [];
-  if (error && error.stderr) parts.push(String(error.stderr).trim());
-  if (!parts.length && error && error.stdout) parts.push(String(error.stdout).trim());
-  if (!parts.length && error && error.message) parts.push(String(error.message).trim());
-  const detail = parts.join(' ').split(/\r?\n/).filter(Boolean).slice(-3).join(' ');
-  return detail || 'unbekannter Fehler';
-}
-
-/** Does the failure look like the annex remote (the Raspi) being unreachable? */
-function looksUnreachable(text) {
-  return /ssh|connect|connection|unreachable|timed? ?out|network|no route|host key|host is down|refused/i
-    .test(String(text));
-}
+/** Default settings for a fresh install. */
+const DEFAULT_SETTINGS = {
+  /**
+   * Where the git-annex repository lives. Empty means "the vault root itself".
+   * A relative value (e.g. `annex`, `media`, `brain`) is resolved against the
+   * vault root; an absolute path is used as-is.
+   */
+  annexRepoPath: '',
+};
 
 // ---------------------------------------------------------------------------
 // Plugin
@@ -251,6 +227,8 @@ function looksUnreachable(text) {
 
 class ObsidianAnnexPlugin extends Plugin {
   async onload() {
+    await this.loadSettings();
+
     this.loaded = new Set();   // vault-relative paths loaded during this session
     this.busy = false;
     this.mode = 'none';        // 'load' | 'drop' | 'none'
@@ -265,15 +243,17 @@ class ObsidianAnnexPlugin extends Plugin {
 
     this.addCommand({
       id: 'annex-toggle-current-file',
-      name: 'Annex: umschalten (laden/freigeben)',
+      name: 'Toggle load/free for the current file',
       callback: () => this.toggleCurrentFile(),
     });
 
     this.addCommand({
       id: 'annex-drop-all-loaded',
-      name: 'Annex: alle geladenen freigeben',
+      name: 'Free every file loaded this session',
       callback: () => this.dropAllLoaded(),
     });
+
+    this.addSettingTab(new ObsidianAnnexSettingTab(this.app, this));
 
     this.registerEvent(
       this.app.workspace.on('file-open', (file) => {
@@ -290,6 +270,16 @@ class ObsidianAnnexPlugin extends Plugin {
     this.hideStatus();
   }
 
+  // -- settings -------------------------------------------------------------
+
+  async loadSettings() {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  }
+
+  async saveSettings() {
+    await this.saveData(this.settings);
+  }
+
   // -- paths ----------------------------------------------------------------
 
   getVaultRoot() {
@@ -298,6 +288,25 @@ class ObsidianAnnexPlugin extends Plugin {
       return adapter.getBasePath();
     }
     return adapter && adapter.basePath;
+  }
+
+  /**
+   * Absolute path of the git-annex repository, derived from the setting and the
+   * vault root. Returns null when no vault root can be determined and the
+   * setting is not absolute.
+   */
+  getAnnexRepo() {
+    const root = this.getVaultRoot();
+    const configured = String(this.settings && this.settings.annexRepoPath || '').trim();
+    if (path.isAbsolute(configured)) return configured;
+    if (!root) return null;
+    return configured ? path.join(root, configured) : root;
+  }
+
+  /** Human-readable form of the configured repository, for notices. */
+  describeRepo() {
+    const configured = String(this.settings && this.settings.annexRepoPath || '').trim();
+    return configured || '(vault root)';
   }
 
   absolutePath(file) {
@@ -323,13 +332,12 @@ class ObsidianAnnexPlugin extends Plugin {
     if (!file) return result;
     result.file = file;
 
-    const root = this.getVaultRoot();
-    if (!root) {
+    const repo = this.getAnnexRepo();
+    if (!repo) {
       result.reason = 'no-vault';
       return result;
     }
 
-    const repo = path.join(root, ANNEX_DIR);
     if (!fs.existsSync(path.join(repo, '.git'))) {
       result.reason = 'not-annex-repo';
       return result;
@@ -408,22 +416,22 @@ class ObsidianAnnexPlugin extends Plugin {
     if (this.busy) return;
     const file = this.currentFile || this.app.workspace.getActiveFile();
     if (!file) {
-      new Notice('Obsidian Annex: keine aktive Datei.');
+      new Notice('Obsidian Annex: no active file.');
       return;
     }
 
     const result = await this.classify(file);
 
     if (result.reason === 'no-vault') {
-      new Notice('Obsidian Annex: Vault-Pfad konnte nicht ermittelt werden (Desktop-Adapter erwartet).');
+      new Notice('Obsidian Annex: vault path could not be determined (desktop adapter expected).');
       return;
     }
     if (result.reason === 'not-annex-repo') {
-      new Notice('Obsidian Annex: ' + ANNEX_DIR + '/ ist kein git-annex-Repository (kein .git gefunden).');
+      new Notice('Obsidian Annex: ' + this.describeRepo() + ' is not a git-annex repository (no .git found). Set the path in Settings → Obsidian Annex.');
       return;
     }
     if (result.reason === 'outside-repo') {
-      new Notice('Obsidian Annex: „' + file.path + '" liegt außerhalb von ' + ANNEX_DIR + '/.');
+      new Notice('Obsidian Annex: "' + file.path + '" is outside the annex repository (' + this.describeRepo() + ').');
       return;
     }
 
@@ -432,7 +440,7 @@ class ObsidianAnnexPlugin extends Plugin {
     } else if (result.mode === 'drop') {
       await this.dropFile(result);
     } else {
-      new Notice('Obsidian Annex: nichts zu tun für „' + file.path + '" (keine Annex-Datei oder einzige Kopie).');
+      new Notice('Obsidian Annex: nothing to do for "' + file.path + '" (not an annexed file, or the only copy).');
     }
   }
 
@@ -443,12 +451,12 @@ class ObsidianAnnexPlugin extends Plugin {
     try {
       await run('git annex get ' + quoteArg(rel), repo);
       this.loaded.add(file.path);
-      new Notice('Obsidian Annex: „' + rel + '" geladen.');
+      new Notice('Obsidian Annex: loaded "' + rel + '".');
       await this.reloadFile(file);
     } catch (error) {
       const detail = describeError(error);
-      const hint = looksUnreachable(detail) ? 'Raspi nicht erreichbar? ' : '';
-      new Notice('Obsidian Annex: Laden fehlgeschlagen. ' + hint + detail, 12000);
+      const hint = looksUnreachable(detail) ? 'remote unreachable? ' : '';
+      new Notice('Obsidian Annex: load failed. ' + hint + detail, 12000);
     } finally {
       this.busy = false;
       await this.refreshStatus(this.app.workspace.getActiveFile());
@@ -463,12 +471,12 @@ class ObsidianAnnexPlugin extends Plugin {
       // Deliberately no --force: a refusal is the safety net, not an error.
       await run('git annex drop ' + quoteArg(rel), repo);
       this.loaded.delete(file.path);
-      new Notice('Obsidian Annex: „' + rel + '" freigegeben.');
+      new Notice('Obsidian Annex: freed "' + rel + '".');
       await this.reloadFile(file);
     } catch (error) {
       const detail = describeError(error);
-      const hint = looksUnreachable(detail) ? 'Raspi nicht erreichbar? ' : '';
-      new Notice('Obsidian Annex: Freigeben abgelehnt. ' + hint + detail, 12000);
+      const hint = looksUnreachable(detail) ? 'remote unreachable? ' : '';
+      new Notice('Obsidian Annex: free refused. ' + hint + detail, 12000);
     } finally {
       this.busy = false;
       await this.refreshStatus(this.app.workspace.getActiveFile());
@@ -478,26 +486,26 @@ class ObsidianAnnexPlugin extends Plugin {
   async dropAllLoaded() {
     if (this.busy) return;
 
-    const root = this.getVaultRoot();
-    const repo = root ? path.join(root, ANNEX_DIR) : null;
+    const repo = this.getAnnexRepo();
     if (!repo || !fs.existsSync(path.join(repo, '.git'))) {
-      new Notice('Obsidian Annex: ' + ANNEX_DIR + '/ ist kein git-annex-Repository (kein .git gefunden).');
+      new Notice('Obsidian Annex: ' + this.describeRepo() + ' is not a git-annex repository (no .git found). Set the path in Settings → Obsidian Annex.');
       return;
     }
 
     const vaultPaths = Array.from(this.loaded);
     if (!vaultPaths.length) {
-      new Notice('Obsidian Annex: in dieser Sitzung wurde noch nichts geladen.');
+      new Notice('Obsidian Annex: nothing has been loaded this session.');
       return;
     }
 
+    const root = this.getVaultRoot();
     const rels = [];
     for (const p of vaultPaths) {
       const rel = this.repoRelativePath(path.join(root, p.split('/').join(path.sep)), repo);
       if (rel) rels.push(rel);
     }
     if (!rels.length) {
-      new Notice('Obsidian Annex: keine freigebbaren Dateien.');
+      new Notice('Obsidian Annex: no files can be freed.');
       return;
     }
 
@@ -508,11 +516,11 @@ class ObsidianAnnexPlugin extends Plugin {
       // No --force here either.
       await run('git annex drop ' + rels.map(quoteArg).join(' '), repo);
       this.loaded.clear();
-      new Notice('Obsidian Annex: ' + rels.length + ' Datei(en) freigegeben.');
+      new Notice('Obsidian Annex: freed ' + rels.length + ' file(s).');
     } catch (error) {
       const detail = describeError(error);
-      const hint = looksUnreachable(detail) ? 'Raspi nicht erreichbar? ' : '';
-      new Notice('Obsidian Annex: Freigeben abgelehnt. ' + hint + detail, 12000);
+      const hint = looksUnreachable(detail) ? 'remote unreachable? ' : '';
+      new Notice('Obsidian Annex: free refused. ' + hint + detail, 12000);
     } finally {
       this.busy = false;
       await this.refreshStatus(this.app.workspace.getActiveFile());
@@ -536,9 +544,81 @@ class ObsidianAnnexPlugin extends Plugin {
       }
     } catch (err) {
       // Never let a reload failure mask a successful annex operation.
-      new Notice('Obsidian Annex: Annex-Aktion ok, Ansicht konnte nicht aktualisiert werden: ' + describeError(err));
+      new Notice('Obsidian Annex: annex action succeeded, but the view could not be refreshed: ' + describeError(err));
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Settings tab
+// ---------------------------------------------------------------------------
+
+class ObsidianAnnexSettingTab extends PluginSettingTab {
+  constructor(app, plugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+
+    containerEl.createEl('h2', { text: 'Obsidian Annex' });
+
+    new Setting(containerEl)
+      .setName('Annex repository path')
+      .setDesc(
+        'Folder holding the git-annex repository, relative to the vault root ' +
+          '(for example "annex" or "media"). Leave empty if the vault itself is ' +
+          'the annex repository. Absolute paths are also accepted.'
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder('(vault root)')
+          .setValue(this.plugin.settings.annexRepoPath)
+          .onChange(async (value) => {
+            this.plugin.settings.annexRepoPath = value.trim();
+            await this.plugin.saveSettings();
+            this.plugin.refreshStatus(this.app.workspace.getActiveFile());
+          })
+      );
+  }
+}
+
+/** Shell-quote a single argument for `exec` (Windows and POSIX friendly). */
+function quoteArg(value) {
+  return '"' + String(value).replace(/"/g, '\\"') + '"';
+}
+
+/** Run a command through the shell and resolve with its output. */
+function run(command, cwd) {
+  return new Promise((resolve, reject) => {
+    exec(command, { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+/** Condense a Node/git error into one readable line for a Notice. */
+function describeError(error) {
+  const parts = [];
+  if (error && error.stderr) parts.push(String(error.stderr).trim());
+  if (!parts.length && error && error.stdout) parts.push(String(error.stdout).trim());
+  if (!parts.length && error && error.message) parts.push(String(error.message).trim());
+  const detail = parts.join(' ').split(/\r?\n/).filter(Boolean).slice(-3).join(' ');
+  return detail || 'unknown error';
+}
+
+/** Does the failure look like the annex remote being unreachable? */
+function looksUnreachable(text) {
+  return /ssh|connect|connection|unreachable|timed? ?out|network|no route|host key|host is down|refused/i
+    .test(String(text));
 }
 
 module.exports = ObsidianAnnexPlugin;
@@ -556,3 +636,4 @@ module.exports.STATE_NONE = STATE_NONE;
 module.exports.parseWhereisJson = parseWhereisJson;
 module.exports.hasRemoteCopy = hasRemoteCopy;
 module.exports.annexState = annexState;
+module.exports.DEFAULT_SETTINGS = DEFAULT_SETTINGS;

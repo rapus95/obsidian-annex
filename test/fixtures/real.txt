@@ -1,4 +1,4 @@
-# Echte Datei
+# Real file
 
-Dies ist echter Inhalt und kein git-annex Pointer. Der Text beginnt mit einem
-Markdown-Heading, nicht mit "/annex/objects/".
+This is real content and not a git-annex pointer. The text starts with a
+Markdown heading, not with "/annex/objects/".

@@ -30,22 +30,22 @@ function check(name, fn) {
   }
 }
 
-// --- real, captured `git annex whereis --json` output (git-annex 10.20261006) ---
+// --- representative `git annex whereis --json` output (git-annex 10.x) --------
 
-// Pointer file, content only on the raspi remote (copied verbatim from the
-// working machine, trimmed to the fields we care about).
+// A pointer file whose content lives only on a remote (trimmed to the fields
+// the plugin reads).
 const WHEREIS_REMOTE_ONLY =
   '{"command":"whereis","error-messages":[],' +
-  '"file":"studium/kipaed/extrakt/png/band1.png",' +
+  '"file":"notes/attachments/diagram.png",' +
   '"key":"SHA256E-s21285--87df50f6.png","success":true,' +
-  '"whereis":[{"description":"git@raspi:~/brain.git [raspi]","here":false,' +
+  '"whereis":[{"description":"git@example.com:~/annex.git [origin]","here":false,' +
   '"urls":[],"uuid":"188da70c-7f58-4c88-adbd-1d41124e2cc9"}]}';
 
 // Real content present here *and* a copy on a remote.
 const WHEREIS_HERE_AND_REMOTE =
   '{"command":"whereis","success":true,"whereis":[' +
   '{"description":"here","here":true,"urls":[],"uuid":"aaaa"},' +
-  '{"description":"git@raspi:~/brain.git [raspi]","here":false,"urls":[],"uuid":"bbbb"}]}';
+  '{"description":"git@example.com:~/annex.git [origin]","here":false,"urls":[],"uuid":"bbbb"}]}';
 
 // Real content present here and it is the only copy.
 const WHEREIS_HERE_ONLY =
