@@ -171,20 +171,16 @@ Open for feature requests, issues and bug reports.
 
 ## Compatibility
 
-`minAppVersion` is set to **1.4.0** — a conservative bound, not a tested
-minimum. Every Obsidian API this plugin uses has existed since **v0.9.7
-(October 2020)**, the first commit of the
-[API repository](https://github.com/obsidianmd/obsidian-api):
+`minAppVersion` is set to **1.4.0**. Every Obsidian API this plugin uses exists
+in 1.4.0 with matching signatures — verified against the type definitions in
+[`obsidianmd/obsidian-api`](https://github.com/obsidianmd/obsidian-api) at
+commit `90517f4` ("Release for 1.4.0").
 
-| API | Commit | Date |
-|---|---|---|
-| `addStatusBarItem`, `getLeaf`, `addCommand`, `Notice`, `vault.modify`, `vault.adapter` | `f7125ac` | 2020-10-26 |
-| `registerEvent` | `abe96e8` | 2020-10-29 |
+The earliest API-repo commit that contains every API used here is `06510d0`
+(v0.9.11, 2020-11-08), so 1.4.0 is a conservative bound rather than a measured
+minimum. Development and testing happened on **1.14.4**.
 
-(`path`, `child_process` and `fs` are Node built-ins, not Obsidian APIs.)
-
-Development and testing happened on **1.14.4**. If you run it on an older
-version — whether it works or not — please
+If you run it on an older version — whether it works or not — please
 [open an issue](https://github.com/rapus95/obsidian-annex/issues). That tells us
 whether the bound can be lowered, or has to be raised.
 
